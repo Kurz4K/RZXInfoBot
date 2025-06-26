@@ -1,7 +1,8 @@
 import os
 import logging
+import shutil
 from telegram import (
-    Update, InlineKeyboardButton, InlineKeyboardMarkup, Document
+    Update, InlineKeyboardButton, InlineKeyboardMarkup, Document, InputFile
 )
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler,
@@ -10,19 +11,17 @@ from telegram.ext import (
 from config import BOT_TOKEN, ADMINS
 from core.storage import (
     get_total_upload_size, save_upload, is_txt_file,
-    get_uploaded_dir
+    get_uploaded_dir, get_user_dir
+)
+from core.admin import (
+    is_admin, set_group_target, get_group_target, send_file_to_group
 )
 
-# Enable logging
+# ─────────────── Logging ───────────────
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Track user state (simple in-memory for now)
-user_states = {}
-
-# ─────────────────────────────────────────────────────────────
-
-# Start command
+# ─────────────── /start ───────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("MLBB", callback_data="game_mlbb")],
@@ -33,7 +32,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-# Game button handler
+# ─────────────── MLBB Menu ───────────────
 async def game_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -49,17 +48,17 @@ async def game_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await query.edit_message_text("🚧 CODM is not available yet.")
 
-# Document (.txt) upload
+# ─────────────── Upload .txt File ───────────────
 async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     doc: Document = update.message.document
 
-    # Only allow .txt
+    # Validate type
     if not is_txt_file(doc.file_name):
         await update.message.reply_text("❌ Invalid File. Only .txt files are allowed.")
         return
 
-    # Check storage limit
+    # Enforce 30MB storage limit
     current_mb = get_total_upload_size(user.id)
     if current_mb + (doc.file_size / (1024 * 1024)) > 30:
         await update.message.reply_text(
@@ -71,20 +70,87 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text("📥 Processing, please wait...")
 
-    # Save file to /uploaded/
+    # Save to /uploaded
     file = await doc.get_file()
     content = await file.download_as_bytearray()
-    saved_path = save_upload(user.id, doc.file_name, content)
+    save_upload(user.id, doc.file_name, content)
 
     await update.message.reply_text("✅ File uploaded successfully.\nWhat do you want to do next?")
-    # You'll hook this into a decision menu later (Check, Clean Format, Separate Levels)
 
-# ─────────────────────────────────────────────────────────────
+# ─────────────── /broadcast ───────────────
+async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if not is_admin(user.id):
+        await update.message.reply_text("❌ Not authorized.")
+        return
+    if not context.args:
+        await update.message.reply_text("Usage: /broadcast <message>")
+        return
+    message = "📢 RZX Broadcast\n\n" + " ".join(context.args)
+    users = get_all_user_ids()
+    for uid in users:
+        try:
+            await context.bot.send_message(uid, message)
+        except:
+            continue
+    await update.message.reply_text("✅ Broadcast sent.")
 
+# Helper: get user list (basic version — replace with real DB later)
+def get_all_user_ids():
+    base_path = "user_data"
+    if not os.path.exists(base_path):
+        return []
+    return [int(uid) for uid in os.listdir(base_path) if uid.isdigit()]
+
+# ─────────────── /deletedata ───────────────
+async def deletedata(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user_folder = get_user_dir(user_id)
+    if os.path.exists(user_folder):
+        shutil.rmtree(user_folder)
+        os.makedirs(user_folder)
+    await update.message.reply_text("🧹 All your uploaded files have been deleted.\nYou can now upload new `.txt` files.")
+
+# ─────────────── /sendhereX ───────────────
+async def set_sendhere(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if not is_admin(user.id):
+        await update.message.reply_text("❌ Not authorized.")
+        return
+
+    command = update.message.text.strip().lower()
+    label_map = {
+        "/sendhereraw": "raw",
+        "/sendheregood": "good",
+        "/sendhereaverage": "average",
+        "/sendheretrash": "trash",
+        "/sendhereincorrect": "incorrect",
+        "/sendherebanned": "banned"
+    }
+
+    label = label_map.get(command)
+    if not label:
+        await update.message.reply_text("❌ Invalid command.")
+        return
+
+    if set_group_target(label, update.message.chat_id):
+        await update.message.reply_text(f"📡 Bot is now active in this group.\nReady to upload: **{label.capitalize()}** files.")
+    else:
+        await update.message.reply_text("❌ Failed to bind group.")
+
+# ─────────────── Main ───────────────
 def main():
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("broadcast", broadcast))
+    app.add_handler(CommandHandler("deletedata", deletedata))
+    app.add_handler(CommandHandler(
+        ["sendhereraw", "sendheregood", "sendhereaverage",
+         "sendheretrash", "sendhereincorrect", "sendherebanned"],
+        set_sendhere
+    ))
+
     app.add_handler(CallbackQueryHandler(game_choice, pattern="^game_.*|^mlbb_.*"))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_file))
 
