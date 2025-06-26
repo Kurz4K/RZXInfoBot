@@ -1,16 +1,17 @@
 import os
 
-# Telegram Bot token
+# Telegram
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-# OpenAI API key (for GPT fallback)
+# OpenAI
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-# Comma-separated list of Telegram user IDs who are admins
+# Admins
 ADMINS = [int(i) for i in os.getenv("ADMINS", "").split(",") if i]
 
-# Maximum total upload size per user (MB)
-MAX_FILE_SIZE_MB = int(os.getenv("MAX_FILE_SIZE_MB", 30))
-
-# How many “Separate Levels” a user can run per day
+# File limits
+MAX_FILE_SIZE_MB       = int(os.getenv("MAX_FILE_SIZE_MB", 30))
 DAILY_SEPARATION_LIMIT = int(os.getenv("DAILY_SEPARATION_LIMIT", 1))
+
+# Base storage directory for all user files
+BASE_DIR = os.getenv("BASE_DIR", "user_data")
